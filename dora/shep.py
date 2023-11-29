@@ -189,6 +189,20 @@ class _JobArray:
     sheeps: tp.List[Sheep] = field(default_factory=list)
 
 
+class MPISlurmExecutor(submitit.SlurmExecutor):
+    def __init__(
+        self, folder: tp.Union[Path, str], max_num_timeout: int = 3, python: tp.Optional[str] = None, **parameters
+    ) -> None:
+        super(MPISlurmExecutor, self).__init__(folder, max_num_timeout=max_num_timeout, python=python)
+        self.parameters = parameters
+        self.parameters["use_srun"] = False  # since we use mpirun we want to disable the srun prefix in the command
+
+    @property
+    def _submitit_command_str(self) -> str:
+        prefix = "time mpirun -np $SLURM_NTASKS -x NCCL_SOCKET_IFNAME=ib"
+        return prefix + ' ' + super(MPISlurmExecutor, self)._submitit_command_str
+
+
 class Shepherd:
     """
     Takes care of the little jobs.
@@ -204,6 +218,12 @@ class Shepherd:
         self._orphans.mkdir(exist_ok=True, parents=True)
         self._arrays.mkdir(exist_ok=True, parents=True)
         self.log = log
+
+        # very hacky shit
+        self._executor = submitit.SlurmExecutor
+        if os.environ.get("USE_MPI"):
+            print("!!!!!!!!!!!")
+            self._executor = MPISlurmExecutor
 
         self._in_job_array: bool = False
         self._existing_git_clone: tp.Optional[Path] = None
@@ -339,7 +359,7 @@ class Shepherd:
                                slurm_config: SlurmConfig) -> submitit.SlurmExecutor:
         os.environ['SLURM_KILL_BAD_EXIT'] = '1'  # Kill the job if any of the task fails
         kwargs = dict(slurm_config.__dict__)
-        executor = submitit.SlurmExecutor(
+        executor = self._executor(
             folder=folder, max_num_timeout=kwargs.pop('max_num_timeout'))
         gpus = slurm_config.gpus
         if gpus > 8:
